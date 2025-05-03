@@ -14,7 +14,7 @@ import requests
 
 app = Flask(__name__)
 # IP Address
-_URL = 'http://10.0.0.3'
+_URL = 'http://192.168.18.57'
 # Default Streaming Port
 _PORT = '81'
 # Default streaming route
@@ -24,46 +24,93 @@ SEP = ':'
 stream_url = ''.join([_URL,SEP,_PORT,_ST])
 
 
+## -----------Metodos logicos-----------------
+def create_motion_detector():
+    return cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=True)
+
+def detect_motion_adaptive(mog2, frame):
+    mask = mog2.apply(frame)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return mask
+
+def calculate_fps(prev_time_container):
+    current_time = time.time()
+    fps = 1.0 / (current_time - prev_time_container["time"])
+    prev_time_container["time"] = current_time
+    return fps
+
+def apply_hist_equalization(gray):
+    return cv2.equalizeHist(gray)
+
+def apply_clahe(gray):
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    return clahe.apply(gray)
+
+def apply_gamma_correction(gray, gamma=1.5):
+    invGamma = 1.0 / gamma
+    table = np.array([
+        ((i / 255.0) ** invGamma) * 255
+        for i in np.arange(0, 256)
+    ]).astype("uint8")
+    return cv2.LUT(gray, table)
+
+
 def video_capture():
     res = requests.get(stream_url, stream=True)
-    for chunk in res.iter_content(chunk_size=100000):
+    mog2 = create_motion_detector()
+    prev_time_container = {"time": time.time()}
 
+    for chunk in res.iter_content(chunk_size=100000):
         if len(chunk) > 100:
             try:
+                # Decodificar el chunk como imagen
                 img_data = BytesIO(chunk)
                 cv_img = cv2.imdecode(np.frombuffer(img_data.read(), np.uint8), 1)
+                if cv_img is None:
+                    continue
+
+                # === Calcular FPS ===
+                fps = calculate_fps(prev_time_container)
+                cv2.putText(cv_img, f"FPS: {fps:.2f}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+
+                # === Movimiento (MOG2 adaptativo) ===
+                motion_mask = detect_motion_adaptive(mog2, cv_img)
+                motion_display = cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR)
+
+                # === Ruido sal y pimienta ===
                 gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-                N = 537
                 height, width = gray.shape
-                noise = np.full((height, width), 0, dtype=np.uint8)
-                random_positions = (np.random.randint(0, height, N), np.random.randint(0, width, N))
-
-                noise[random_positions[0], random_positions[1]] = 255
-
+                N = 537
+                noise = np.zeros((height, width), dtype=np.uint8)
+                rand_y = np.random.randint(0, height, N)
+                rand_x = np.random.randint(0, width, N)
+                noise[rand_y, rand_x] = 255
                 noise_image = cv2.bitwise_or(gray, noise)
+                noise_display = cv2.cvtColor(noise_image, cv2.COLOR_GRAY2BGR)
 
-                total_image = np.zeros((height, width * 2), dtype=np.uint8)
-                total_image[:, :width] = gray
-                total_image[:, width:] = noise_image
+                # === Combinar: original + movimiento + ruido ===
+                combined = np.hstack((cv_img, motion_display, noise_display))
 
-                (flag, encodedImage) = cv2.imencode(".jpg", total_image)
+                flag, encodedImage = cv2.imencode(".jpg", combined)
                 if not flag:
                     continue
 
-                yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' +
                        bytearray(encodedImage) + b'\r\n')
 
             except Exception as e:
-                print(e)
+                print(f"Error procesando chunk: {e}")
                 continue
 
+
 def video_capture_native():
-    cap = cv2.VideoCapture(0)  # Usa webcam local
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("No se pudo acceder a la cámara")
 
-    prev_gray = None  # frame anterior en escala de grises
-    prev_time = time.time()
     mog2 = create_motion_detector()
     prev_time_container = {"time": time.time()}
 
@@ -73,37 +120,55 @@ def video_capture_native():
             continue
 
         try:
-
+            # === Calcular FPS ===
             fps = calculate_fps(prev_time_container)
-
             cv2.putText(curr_frame, f"FPS: {fps:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
-            # Convertir a escala de grises
+            # === Convertir a escala de grises ===
             gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
             height, width = gray.shape
 
+            # === Detección de movimiento (MOG2) ===
             motion_mask = detect_motion_adaptive(mog2, curr_frame)
             motion_display = cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR)
 
-            # Generar ruido sal y pimienta
-            N = 537
-            noise = np.zeros((height, width), dtype=np.uint8)
-            rand_y = np.random.randint(0, height, N)
-            rand_x = np.random.randint(0, width, N)
-            noise[rand_y, rand_x] = 255
-            noise_image = cv2.bitwise_or(gray, noise)
-            noise_display = cv2.cvtColor(noise_image, cv2.COLOR_GRAY2BGR)
+            # === Filtros para mejora de iluminación ===
+            eq_hist = apply_hist_equalization(gray)
+            eq_clahe = apply_clahe(gray)
+            eq_gamma = apply_gamma_correction(gray, gamma=1.5)
 
-            # Concatenar: original + movimiento + con ruido
-            combined = np.hstack((curr_frame, motion_display, noise_display))
+            eq_hist_color = cv2.cvtColor(eq_hist, cv2.COLOR_GRAY2BGR)
+            eq_clahe_color = cv2.cvtColor(eq_clahe, cv2.COLOR_GRAY2BGR)
+            eq_gamma_color = cv2.cvtColor(eq_gamma, cv2.COLOR_GRAY2BGR)
+            cv2.putText(eq_hist_color, "Hist. Equal.", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
-            # Codificar como JPEG
+            cv2.putText(eq_clahe_color, "CLAHE", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+            cv2.putText(eq_gamma_color, "Gamma Corr.", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+            # Concatenar original + movimiento
+            row1 = np.hstack((curr_frame, motion_display))
+
+            # Concatenar filtros
+            row2 = np.hstack((eq_hist_color, eq_clahe_color, eq_gamma_color))
+
+            # Asegurar que ambas filas tengan mismo ancho antes de hacer vstack
+            if row1.shape[1] != row2.shape[1]:
+                target_width = max(row1.shape[1], row2.shape[1])
+                row1 = cv2.resize(row1, (target_width, row1.shape[0]))
+                row2 = cv2.resize(row2, (target_width, row2.shape[0]))
+
+            combined = np.vstack((row1, row2))
+
+            # === Codificar como JPEG ===
             flag, encodedImage = cv2.imencode(".jpg", combined)
             if not flag:
                 continue
 
-            # Enviar por stream
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' +
                    bytearray(encodedImage) +
@@ -114,43 +179,16 @@ def video_capture_native():
             continue
 
 
+
 @app.route("/")
 def index():
-    return render_template("test.html")
+    return render_template("index.html")
 
 
 @app.route("/video_stream")
 def video_stream():
     return Response(video_capture_native(),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
-
-
-## -----------Metodos logicos-----------------
-def create_motion_detector():
-    return cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=True)
-
-def detect_motion_adaptive(mog2_subtractor, curr_frame):
-    # Aplica substracción adaptativa
-    mask = mog2_subtractor.apply(curr_frame)
-
-    # Limpieza con operaciones morfológicas
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-
-    return mask
-
-import time
-
-# Guarda el tiempo anterior en una variable mutable (como un diccionario)
-def calculate_fps(prev_time_container):
-    current_time = time.time()
-    fps = 1.0 / (current_time - prev_time_container["time"])
-    prev_time_container["time"] = current_time
-    return fps
-
-
-
-
 
 if __name__ == "__main__":
     app.run(debug=False)
