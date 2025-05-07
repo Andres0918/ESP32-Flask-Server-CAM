@@ -5,68 +5,91 @@
 # Description: A simple example to process video captured by the ESP32-XIAO-S3 or ESP32-CAM-MB in Flask.
 
 
-from flask import Flask, render_template, Response, stream_with_context, Request
-from io import BytesIO
-
+from flask import Flask, render_template, request, Response, send_from_directory
 import cv2
 import numpy as np
-import requests
+import os
 
 app = Flask(__name__)
-# IP Address
-_URL = 'http://10.0.0.3'
-# Default Streaming Port
-_PORT = '81'
-# Default streaming route
-_ST = '/stream'
-SEP = ':'
+app.config['UPLOAD_FOLDER'] = 'imagenes_medicas'
+app.config['PROCESSED_FOLDER'] = 'static/processed'
 
-stream_url = ''.join([_URL,SEP,_PORT,_ST])
+# Asegurarse de que existen las carpetas necesarias
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['PROCESSED_FOLDER'], exist_ok=True)
 
-
-def video_capture():
-    res = requests.get(stream_url, stream=True)
-    for chunk in res.iter_content(chunk_size=100000):
-
-        if len(chunk) > 100:
-            try:
-                img_data = BytesIO(chunk)
-                cv_img = cv2.imdecode(np.frombuffer(img_data.read(), np.uint8), 1)
-                gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-                N = 537
-                height, width = gray.shape
-                noise = np.full((height, width), 0, dtype=np.uint8)
-                random_positions = (np.random.randint(0, height, N), np.random.randint(0, width, N))
-                
-                noise[random_positions[0], random_positions[1]] = 255
-
-                noise_image = cv2.bitwise_or(gray, noise)
-
-                total_image = np.zeros((height, width * 2), dtype=np.uint8)
-                total_image[:, :width] = gray
-                total_image[:, width:] = noise_image
-
-                (flag, encodedImage) = cv2.imencode(".jpg", total_image)
-                if not flag:
-                    continue
-
-                yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
-                bytearray(encodedImage) + b'\r\n')
-
-            except Exception as e:
-                print(e)
-                continue
+def apply_morph_operations(img):
+    # Usa kernels más grandes
+    kernel_sizes = [15, 25, 37]  # Ajusta según necesidad
+    results = {}
+    
+    for size in kernel_sizes:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (size, size))  # Cambia a MORPH_RECT
+        
+        # Operaciones
+        erosion = cv2.erode(img, kernel, iterations=1)
+        dilation = cv2.dilate(img, kernel, iterations=1)
+        tophat = cv2.morphologyEx(img, cv2.MORPH_TOPHAT, kernel)
+        blackhat = cv2.morphologyEx(img, cv2.MORPH_BLACKHAT, kernel)
+        combined = cv2.add(img, cv2.subtract(tophat, blackhat))
+        
+        results[f'{size}x{size}'] = {
+            'original': img,
+            'erosion': erosion,
+            'dilation': dilation,
+            'tophat': tophat,
+            'blackhat': blackhat,
+            'combined': combined
+        }
+    
+    return results
 
 @app.route("/")
 def index():
+    """Página principal con formulario de carga"""
     return render_template("index.html")
 
+@app.route("/process", methods=["POST"])
+def process():
+    """Procesa las imágenes cargadas y prepara datos para el template"""
+    files = request.files.getlist("image")
+    processed_results = []
+    
+    for file in files:
+        if file.filename != '':
+            # Leer y procesar imagen
+            npimg = np.frombuffer(file.read(), np.uint8)
+            img = cv2.imdecode(npimg, cv2.IMREAD_GRAYSCALE)
+            
+            # Aplicar operaciones morfológicas
+            results = apply_morph_operations(img)
+            
+            # Guardar resultados y preparar datos para la vista
+            for kernel_size, operations in results.items():
+                # Guardar todas las versiones procesadas
+                image_data = {
+                    'original_name': file.filename,
+                    'kernel_size': kernel_size
+                }
+                
+                for op_name, processed_img in operations.items():
+                    filename = f"{file.filename}_{kernel_size}_{op_name}.jpg"
+                    path = os.path.join(app.config['PROCESSED_FOLDER'], filename)
+                    cv2.imwrite(path, processed_img)
+                    
+                    # Asociar cada operación a su ruta
+                    image_data[f'{op_name}_path'] = filename
+                
+                processed_results.append(image_data)
+    
+    return render_template("resultado_imgs.html", results=processed_results)
 
-@app.route("/video_stream")
-def video_stream():
-    return Response(video_capture(),
-                    mimetype="multipart/x-mixed-replace; boundary=frame")
+
+@app.route("/processed/<filename>")
+def processed_file(filename):
+    """Sirve archivos procesados"""
+    return send_from_directory(app.config['PROCESSED_FOLDER'], filename)
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    app.run(debug=True)
 
