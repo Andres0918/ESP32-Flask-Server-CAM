@@ -41,6 +41,7 @@
         }
     </style>
 </head>
+
 <body class="container">
     <div class="containerHeader">
         <h1>Video Streaming</h1>
@@ -78,6 +79,16 @@
 <!-- Video container donde se inserta el stream dinámicamente -->
     <iframe id="videoStream" style="width:100%; height:800px; border:none;" src="/stream_page"></iframe>
 
+    <div class="container">
+        <h1>Procesamiento de Imágenes Médicas</h1>
+        <p>Sube hasta 3 imágenes médicas (radiografías, angiografías, TACs, etc.) para aplicar operaciones morfológicas.</p>
+        
+        <form action="/process" method="post" enctype="multipart/form-data">
+            <input type="file" name="image" accept="image/*" multiple required>
+            <p>Máximo 3 imágenes</p>
+            <button type="submit">Procesar Imágenes</button>
+        </form>
+    </div>
 
 
 <script>
@@ -99,6 +110,6 @@
         document.getElementById("videoStream").src = "/stream_page" + query;
     });
 </script>
-
+     
 </body>
 </html>
