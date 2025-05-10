@@ -118,45 +118,33 @@ def video_capture(mean=0, std=25, var=0.04):
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             motion_mask = detect_motion(mog2, frame)
-            mask_color = cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR)
-
-            # Convertir mask a 3 canales para XOR y OR
-            mask_color = cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR)
-
-            # === APLICAR OPERACIONES BITWISE ===
-            motion_and = cv2.bitwise_and(frame, frame, mask=motion_mask)
-            motion_or = cv2.bitwise_or(frame, frame, mask=motion_mask)
-            motion_xor = cv2.bitwise_xor(frame, frame, mask=motion_mask)
-
-            # Etiquetas
-            motion_and = cv2.putText(motion_and, "AND", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-            motion_or = cv2.putText(motion_or, "OR", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-            motion_xor = cv2.putText(motion_xor, "XOR", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-
-            # Agrupar en fila
-            motion_row = np.hstack((motion_and, motion_or, motion_xor))
 
             # Mostrar FPS en frame principal
             fps = calculate_fps(prev)
             cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
-            # --- Otros filtros si los usas ---
+            # --- Agregar Ruido ---
+            noisy_gauss = add_gaussian_noise(frame, mean, std)
+            noisy_speckle = add_speckle_noise(frame, var)
+
+            # --- Aplicar Filtros a las Imágenes con Ruido ---
+            blur, gauss, median = [add_fps(img, fps) for img in apply_smoothing(noisy_gauss)]  # Aquí aplicamos los filtros al frame con ruido gaussiano
+            noisy_gauss_blur, noisy_gauss_gauss, noisy_gauss_median = [add_fps(img, fps) for img in apply_smoothing(noisy_gauss)]  # Aplicar los filtros de suavizado al ruido
+
+            # --- Otros Filtros ---
             motion_disp = cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR)
             motion_disp = add_fps(motion_disp, fps)
             eq_hist, eq_clahe, eq_gamma = [add_fps(img, fps) for img in apply_lighting_filters(gray)]
-            noisy_gauss = add_fps(add_gaussian_noise(frame, mean, std), fps)
-            noisy_speckle = add_fps(add_speckle_noise(frame, var), fps)
-            blur, gauss, median = [add_fps(img, fps) for img in apply_smoothing(gray)]
             canny_raw, sobel_raw = [add_fps(img, fps) for img in apply_edges(frame, False)]
             canny_smooth, sobel_smooth = [add_fps(img, fps) for img in apply_edges(frame, True)]
 
+            # --- Agrupar las Imágenes ---
             rows = [
                 np.hstack((frame, motion_disp, cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR))),
-                motion_row,
                 np.hstack((eq_hist, eq_clahe, eq_gamma)),
                 np.hstack((noisy_gauss, noisy_speckle)),
-                np.hstack((blur, gauss, median)),
+                np.hstack((noisy_gauss_blur, noisy_gauss_gauss, noisy_gauss_median)),
                 np.hstack((canny_raw, sobel_raw)),
                 np.hstack((canny_smooth, sobel_smooth))
             ]
@@ -361,6 +349,63 @@ def comparar_ruido():
         </body>
         </html>
     """
+
+from flask import Response
+
+@app.route('/bitwise')
+def video_bitwise_operations_stream():
+    url = 'http://192.168.18.57:81/stream'
+
+    try:
+        res = requests.get(url, stream=True)
+    except Exception as e:
+        print(f"[ERROR] No se pudo conectar al stream: {e}")
+        return "Stream error", 500
+
+    fgbg = cv2.createBackgroundSubtractorMOG2()
+
+    def generate():
+        for chunk in res.iter_content(chunk_size=100000):
+            if len(chunk) <= 100:
+                continue
+
+            try:
+                frame = cv2.imdecode(np.frombuffer(BytesIO(chunk).read(), np.uint8), 1)
+                if frame is None:
+                    continue
+
+                # Detección de movimiento
+                fgmask = fgbg.apply(frame)
+                _, fgmask = cv2.threshold(fgmask, 200, 255, cv2.THRESH_BINARY)
+
+                # Máscara circular
+                mask = np.zeros_like(fgmask)
+                cv2.circle(mask, (frame.shape[1]//2, frame.shape[0]//2), 100, 255, -1)
+
+                # Operaciones bitwise
+                and_result = cv2.bitwise_and(fgmask, mask)
+                or_result = cv2.bitwise_or(fgmask, mask)
+                xor_result = cv2.bitwise_xor(fgmask, mask)
+
+                # Stack horizontal (puedes usar vertical también con vstack)
+                combined = np.hstack((
+                    cv2.cvtColor(and_result, cv2.COLOR_GRAY2BGR),
+                    cv2.cvtColor(or_result, cv2.COLOR_GRAY2BGR),
+                    cv2.cvtColor(xor_result, cv2.COLOR_GRAY2BGR)
+                ))
+
+                ret, jpeg = cv2.imencode('.jpg', combined)
+                if not ret:
+                    continue
+
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+
+            except Exception as e:
+                print(f"[WARNING] Error procesando el frame: {e}")
+                continue
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 # ==== [ MAIN ] ====

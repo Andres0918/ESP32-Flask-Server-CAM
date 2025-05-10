@@ -115,11 +115,14 @@
 
         <button type="submit">Aplicar ruido</button>
     </form>
+    <button onclick="window.location.href='/bitwise'"
+        style="padding: 10px 20px; background-color: #990000; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer;">
+    Ver solo Bitwise Stream o ir a /bitwise
+    </button>
 
-    <button id="compareButton">Comparar Filtros con Ruido</button>
+    <button id="compareButton">Comparar Filtros con Ruido y luego darle a aplicar ruido</button>
 
     <iframe id="videoStream" style="width:100%; height:800px; border:none;" src="/stream_page"></iframe>
-
 <script>
     const form = document.getElementById('noiseForm');
     const compareButton = document.getElementById('compareButton');
