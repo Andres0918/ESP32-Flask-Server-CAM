@@ -10,6 +10,7 @@ from flask import Flask, render_template, request, Response, send_from_directory
 import cv2
 import numpy as np
 import os
+import requests
 
 app = Flask(__name__)
 STREAM_URL = 'http://192.168.18.57:81/stream'
