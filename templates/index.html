@@ -6,49 +6,100 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Videostreaming ESP32-CAM</title>
     <style>
-        .container {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100vh;
-            background-color: #f1f1bc;
-            color: black;
-            text-align: center;
-        }
-        .containerHeader {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        form {
-            margin: 20px auto;
-            width: 80%;
-            background-color: #fff;
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 0 8px rgba(0, 0, 0, 0.2);
-        }
-        label {
-            font-weight: bold;
-        }
-        input[type="range"] {
-            width: 60%;
-        }
-        img#videoStream {
-            max-width: 100%;
-            margin-top: 20px;
-            border: 2px solid #000;
-        }
-    </style>
-</head>
+    body {
+        margin: 0;
+        padding: 0;
+        font-family: 'Segoe UI', sans-serif;
+        background-color: #f1f1bc;
+        color: #333;
+    }
 
+    .container {
+        width: 100%;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+        box-sizing: border-box;
+    }
+
+    .containerHeader {
+        text-align: center;
+        margin-bottom: 20px;
+    }
+
+    .containerHeader img {
+        max-width: 400px;
+        width: 100%;
+        height: auto;
+    }
+
+    form {
+        width: 100%;
+        max-width: 700px;
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    label {
+        display: block;
+        margin-top: 15px;
+        margin-bottom: 5px;
+        font-weight: bold;
+        color: #000;
+    }
+
+    input[type="range"] {
+        width: 100%;
+    }
+
+    span {
+        font-weight: normal;
+        color: #555;
+    }
+
+    button {
+        margin-top: 15px;
+        padding: 10px 20px;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 16px;
+    }
+
+    button:hover {
+        background-color: #45a049;
+    }
+
+    iframe#videoStream {
+        width: 100%;
+        max-width: 1280px;
+        height: 720px;
+        border: 3px solid #333;
+        border-radius: 8px;
+        margin-top: 20px;
+    }
+
+    @media (max-width: 768px) {
+        iframe#videoStream {
+            height: 360px;
+        }
+    }
+</style>
+
+</head>
 <body class="container">
     <div class="containerHeader">
         <h1>Video Streaming</h1>
         <img src="{{ url_for('static', filename='Header.webp') }}" alt="Image header" width="50%">
     </div>
 
-    <!-- Sliders de control -->
     <form id="noiseForm">
         <label for="mean">Media Gaussiana:</label><br>
         <input type="range" id="mean" name="mean" min="0" max="100" value="0">
@@ -64,14 +115,12 @@
 
         <button type="submit">Aplicar ruido</button>
     </form>
-    <form action="/comparar_ruido">
-        <button type="submit">Comparar Filtros con Ruido</button>
-    </form>
+    <button onclick="window.location.href='/bitwise'"
+        style="padding: 10px 20px; background-color: #990000; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer;">
+    Ver solo Bitwise Stream o ir a /bitwise
+    </button>
 
-    <form action="/comparar_copyto">
-        <button type="submit">Comparar Regiones con copyTo()</button>
-    </form>
-
+    <button id="compareButton">Comparar Filtros con Ruido y luego darle a aplicar ruido</button>
 
 
 
@@ -82,7 +131,7 @@
     <div class="container">
         <h1>Procesamiento de Imágenes Médicas</h1>
         <p>Sube hasta 3 imágenes médicas (radiografías, angiografías, TACs, etc.) para aplicar operaciones morfológicas.</p>
-        
+
         <form action="/process" method="post" enctype="multipart/form-data">
             <input type="file" name="image" accept="image/*" multiple required>
             <p>Máximo 3 imágenes</p>
@@ -93,23 +142,41 @@
 
 <script>
     const form = document.getElementById('noiseForm');
+    const compareButton = document.getElementById('compareButton');
     const meanInput = document.getElementById("mean");
     const stdInput = document.getElementById("std");
     const varInput = document.getElementById("var");
 
-    meanInput.oninput = () => document.getElementById("meanVal").textContent = meanInput.value;
-    stdInput.oninput = () => document.getElementById("stdVal").textContent = stdInput.value;
-    varInput.oninput = () => document.getElementById("varVal").textContent = varInput.value;
-
+    // Cuando el formulario de los sliders se envíe
     form.addEventListener("submit", function (e) {
-        e.preventDefault();
+        e.preventDefault();  // Prevenir el comportamiento por defecto del formulario
+
         const mean = meanInput.value;
         const std = stdInput.value;
         const variance = varInput.value;
+
+        // Actualizar la URL del iframe con los valores de los sliders
         const query = `?mean=${mean}&std=${std}&var=${variance}&t=${Date.now()}`;
         document.getElementById("videoStream").src = "/stream_page" + query;
+
+        // Opcional: Actualizar la URL en el navegador
+        history.pushState({}, '', `/stream_page${query}`);
+    });
+
+    // Cuando el botón de comparar filtros se haga clic
+    compareButton.addEventListener("click", function () {
+        const mean = meanInput.value;
+        const std = stdInput.value;
+        const variance = varInput.value;
+
+        // Mostrar la URL generada para verificar
+        const query = `?mean=${mean}&std=${std}&var=${variance}&t=${Date.now()}`;
+        alert(`Comparar Filtros con Ruido con URL: /comparar_ruido${query}`);
+
+        // Redirigir a la página de comparación con los valores de los sliders en la URL
+        window.location.href = `/comparar_ruido${query}`;
     });
 </script>
-     
+
 </body>
 </html>
